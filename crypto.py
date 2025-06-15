@@ -2,19 +2,27 @@ import argparse
 import logging
 import os
 
+import secrets
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
 
 DEFAULT_PRIVATE_KEY = 'private_key.pem'
 DEFAULT_PUBLIC_KEY = 'public_key.pem'
+DEFAULT_AES_KEY = 'aes_key.txt'
+
+#--pub-key public_key.pem --verify test_file.txt --signature signature.bin
+#--gen-aes-key --aes-key 'aes_key.txt'
+
 
 def parse_cli_arguments():
     ''' Parses the command line arguments.
     '''
     parser = argparse.ArgumentParser(description='Create a new blob image or update an existing one based on json coniguration file.')
-    parser.add_argument('--gen-rsa', action='store_true', help='Generate RSA2048 public/private key pair')
+    parser.add_argument('--gen-rsa-key', action='store_true', help='Generate RSA2048 public/private key pair')
+    parser.add_argument('--gen-aes-key', action='store_true', help='Generate a random AES256 key')
     parser.add_argument('--priv-key', type=str, default=DEFAULT_PRIVATE_KEY, help='Private key output file')
     parser.add_argument('--pub-key', type=str, default=DEFAULT_PUBLIC_KEY, help='Public key output file')
+    parser.add_argument('--aes-key', type=str, default=DEFAULT_AES_KEY, help='AES key output file')
     parser.add_argument('--sign', type=str, help='Sign a file using RSA-PSS')
     parser.add_argument('--verify', type=str, help='Verify a signature using RSA-PSS')
     parser.add_argument('--signature', type=str, help='Signature file for verification')
@@ -86,9 +94,17 @@ def verify_file_with_pss(public_key_path, file_path, signature_path):
     except Exception as e:
         print("Signature verification failed:", e)
 
+def generate_aes256_key(filepath):
+    """Generate a random 256-bit (32 bytes) AES key and save as hex to file."""
+    key = secrets.token_bytes(32)
+    with open(filepath, "w") as f:
+        f.write(key.hex())
+    print("AES256 key (hex):", key.hex())
+    print(f"AES256 key saved to {filepath}")
+
 def main():
     args = parse_cli_arguments()
-    if args.gen_rsa:
+    if args.gen_rsa_key:
         print("start gen rsa key")
         generate_rsa2048_keypair(args.priv_key, args.pub_key)
     elif args.sign:
@@ -97,6 +113,9 @@ def main():
     elif args.verify:
         print("start verify file")
         verify_file_with_pss(args.pub_key, args.verify, args.signature)
+    if args.gen_aes_key and args.aes_key:
+        print("start gen aes key")
+        generate_aes256_key(args.aes_key)
     else:
         print("hello crypto,nothing todo!")
 
