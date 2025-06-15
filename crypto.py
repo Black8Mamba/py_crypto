@@ -15,6 +15,7 @@ from cryptography.hazmat.backends import default_backend
 DEFAULT_PRIVATE_KEY = 'private_key.pem'
 DEFAULT_PUBLIC_KEY = 'public_key.pem'
 DEFAULT_AES_KEY = 'aes_key.txt'
+DEFAULT_ALIGN = 0x100
 
 #--pub-key public_key.pem --verify test_file.txt --signature signature.bin
 #--gen_aes_key --aes-key aes_key.txt
@@ -24,6 +25,8 @@ DEFAULT_AES_KEY = 'aes_key.txt'
 #--aes_decrypt --aes_key aes_key.txt --in_file MIMXRT1052_Project_Demo_enc.bin --out_file MIMXRT1052_Project_Demo_dec.bin
 #--rsa-pub-encrypt --pub_key public_key.pem --in_file aes_key.txt --out_file aes_key_rsa_enc.txt
 #--rsa_priv_decrypt --priv_key private_key.pem --in_file aes_key_rsa_enc.txt --out_file aes_key_rsa_dec.txt
+#--rsa_sign --priv_key key/private_key.pem --in_file bin/MIMXRT1052_Project_Demo.bin --out_file signature.bin
+#--rsa_verify --pub_key key/public_key.pem --in_file bin/MIMXRT1052_Project_Demo.bin --signature signature.bin
 
 #--append_sign --in_file MIMXRT1052_Project_Demo.bin --out_file MIMXRT1052_Project_Demo_sign.bin --signature signature.bin
 
@@ -38,8 +41,8 @@ def parse_cli_arguments():
     parser.add_argument('--priv_key', type=str, default=DEFAULT_PRIVATE_KEY, help='Private key output file')
     parser.add_argument('--pub_key', type=str, default=DEFAULT_PUBLIC_KEY, help='Public key output file')
     parser.add_argument('--aes_key', type=str, default=DEFAULT_AES_KEY, help='AES key output file')
-    parser.add_argument('--sign', type=str, help='Sign a file using RSA-PSS')
-    parser.add_argument('--verify', type=str, help='Verify a signature using RSA-PSS')
+    parser.add_argument('--rsa_sign', action='store_true', help='Sign a file using RSA-PSS')
+    parser.add_argument('--rsa_verify', action='store_true', help='Verify a signature using RSA-PSS')
     parser.add_argument('--signature', type=str, help='Signature file for verification/append')
     parser.add_argument('--aes_encrypt', action='store_true', help='Encrypt a file with AES256')
     parser.add_argument('--aes_decrypt', action='store_true', help='Decrypt a file with AES256')
@@ -51,6 +54,7 @@ def parse_cli_arguments():
     parser.add_argument('--rsa_pub_decrypt', action='store_true', help='Output file for decrypted AES key (hex)')
     parser.add_argument('--input_type', type=str, help='input file type, binary/hex')
     parser.add_argument('--append_sign', action='store_true', help='append signature data to bin file')
+    parser.add_argument('--align', type=int, default=DEFAULT_ALIGN, help='append data to align')
 
     return parser.parse_args()
 
@@ -80,12 +84,17 @@ def generate_rsa2048_keypair(private_key_path, public_key_path):
         )
     print(f"RSA2048 key pair generated:\n  Private key: {private_key_path}\n  Public key: {public_key_path}")
 
-def sign_file_with_pss(private_key_path, file_path, signature_path):
+def sign_file_with_pss(private_key_path, file_path, signature_path, align):
     """Sign a file using RSA-PSS."""
     with open(private_key_path, "rb") as key_file:
         private_key = serialization.load_pem_private_key(key_file.read(), password=None)
     with open(file_path, "rb") as f:
         data = f.read()
+    # 计算对齐填充长度
+    if align > 0:
+        pad_len = (align - (len(data) % align)) % align
+        if pad_len:
+            data += b'\xFF' * pad_len
     signature = private_key.sign(
         data,
         padding.PSS(
@@ -98,12 +107,17 @@ def sign_file_with_pss(private_key_path, file_path, signature_path):
         sig_file.write(signature)
     print(f"File signed. Signature saved to {signature_path}")
 
-def verify_file_with_pss(public_key_path, file_path, signature_path):
+def verify_file_with_pss(public_key_path, file_path, signature_path, align):
     """Verify a file's signature using RSA-PSS."""
     with open(public_key_path, "rb") as key_file:
         public_key = serialization.load_pem_public_key(key_file.read())
     with open(file_path, "rb") as f:
         data = f.read()
+    # 计算对齐填充长度
+    if align > 0:
+        pad_len = (align - (len(data) % align)) % align
+        if pad_len:
+            data += b'\xFF' * pad_len
     with open(signature_path, "rb") as sig_file:
         signature = sig_file.read()
     try:
@@ -258,12 +272,12 @@ def main():
     if args.gen_rsa_key:
         print("start gen rsa key")
         generate_rsa2048_keypair(args.priv_key, args.pub_key)
-    elif args.sign:
+    elif args.rsa_sign and args.priv_key and args.in_file and args.out_file:
         print("start sign file")
-        sign_file_with_pss(args.priv_key, args.sign, args.signature or "signature.bin")
-    elif args.verify:
+        sign_file_with_pss(args.priv_key, args.in_file, args.out_file or "signature.bin", args.align)
+    elif args.rsa_verify and args.in_file and args.signature and args.align:
         print("start verify file")
-        verify_file_with_pss(args.pub_key, args.verify, args.signature)
+        verify_file_with_pss(args.pub_key, args.in_file, args.signature, args.align)
     elif args.gen_aes_key and args.aes_key:
         print("start gen aes key")
         generate_aes256_key(args.aes_key)
