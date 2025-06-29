@@ -20,15 +20,16 @@ DEFAULT_ALIGN = 0x100
 #--pub-key public_key.pem --verify test_file.txt --signature signature.bin
 #--gen_aes_key --aes-key aes_key.txt
 #--aes_encrypt --aes_key aes_key.txt --in_file test_file.txt --out_file test_file_enc.txt
-#--aes_encrypt --aes_key aes_key.txt --in_file MIMXRT1052_Project_Demo.bin --out_file MIMXRT1052_Project_Demo_enc.bin
+#--aes_encrypt --aes_key key/aes_key.txt --in_file bin/MIMXRT1052_Project_Demo.bin --out_file bin/MIMXRT1052_Project_Demo_enc.bin --iv 3dafba429d9eb430b422da802c9fac41
 #--aes_decrypt --aes_key aes_key.txt --in_file test_file_enc.txt --out_file test_file_dec.txt
-#--aes_decrypt --aes_key aes_key.txt --in_file MIMXRT1052_Project_Demo_enc.bin --out_file MIMXRT1052_Project_Demo_dec.bin
+#--aes_decrypt --aes_key key/aes_key.txt --in_file bin/MIMXRT1052_Project_Demo_enc_new.bin --out_file bin/MIMXRT1052_Project_Demo_dec_new.bin --iv 3dafba429d9eb430b422da802c9fac41
 #--rsa-pub-encrypt --pub_key public_key.pem --in_file aes_key.txt --out_file aes_key_rsa_enc.txt
 #--rsa_priv_decrypt --priv_key private_key.pem --in_file aes_key_rsa_enc.txt --out_file aes_key_rsa_dec.txt
 #--rsa_sign --priv_key key/private_key.pem --in_file bin/MIMXRT1052_Project_Demo.bin --out_file signature.bin
 #--rsa_verify --pub_key key/public_key.pem --in_file bin/MIMXRT1052_Project_Demo.bin --signature signature.bin
 
 #--append_sign --in_file MIMXRT1052_Project_Demo.bin --out_file MIMXRT1052_Project_Demo_sign.bin --signature signature.bin
+#--strip_iv --in_file bin/MIMXRT1052_Project_Demo_enc.bin --out_file bin/MIMXRT1052_Project_Demo_enc_strip.bin
 
 #srec_cat.exe MIMXRT1052_Project_Demo.bin -binary -offset 0x60000000  -output MIMXRT1052_Project_Demo_new.s19 -Motorola
 
@@ -55,6 +56,8 @@ def parse_cli_arguments():
     parser.add_argument('--input_type', type=str, help='input file type, binary/hex')
     parser.add_argument('--append_sign', action='store_true', help='append signature data to bin file')
     parser.add_argument('--align', type=int, default=DEFAULT_ALIGN, help='append data to align')
+    parser.add_argument('--iv', type=str, help='iv for aes256')
+    parser.add_argument('--pad', action='store_true', help='pad 0xff to algin size')
 
     return parser.parse_args()
 
@@ -168,12 +171,45 @@ def read_aes_key_from_file(filepath):
         raise ValueError("AES256 key must be 32 bytes (64 hex chars)")
     return key
 
-def aes256_encrypt_file(input_path, key_file, output_path):
+def aes256_block_encrypt_file(input_path, key_file, iv_hex, output_path):
     """Encrypt a file using AES256-CBC, key from file."""
     key = read_aes_key_from_file(key_file)
-    import secrets
-    iv = secrets.token_bytes(16)
-    print("random iv (hex):", iv.hex())
+    total = 0;
+    if iv_hex == "null":
+        import secrets
+        iv = secrets.token_bytes(16)
+        print("random iv (hex):", iv.hex())
+    else:
+        iv = bytes.fromhex(iv_hex)
+        print("args iv (hex):", iv.hex())
+
+    with open(input_path, "rb") as f, open(output_path, "wb") as f_out:
+        while True:
+            data = f.read(512)
+            if not data:
+                break
+            cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+            encryptor = cipher.encryptor()
+            padder = sym_padding.PKCS7(128).padder()
+
+            padded_data = padder.update(data) + padder.finalize()
+            ciphertext = encryptor.update(padded_data) + encryptor.finalize()
+            size = f_out.write(ciphertext)
+            print("size:", size)
+            total += size
+    print("total size:", total)
+
+def aes256_encrypt_file(input_path, key_file, iv_hex, output_path):
+    """Encrypt a file using AES256-CBC, key from file."""
+    key = read_aes_key_from_file(key_file)
+    if iv_hex == "null":
+        import secrets
+        iv = secrets.token_bytes(16)
+        print("random iv (hex):", iv.hex())
+    else:
+        iv = bytes.fromhex(iv_hex)
+        print("args iv (hex):", iv.hex())
+
     cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
     encryptor = cipher.encryptor()
     padder = sym_padding.PKCS7(128).padder()
@@ -184,14 +220,36 @@ def aes256_encrypt_file(input_path, key_file, output_path):
     ciphertext = encryptor.update(padded_data) + encryptor.finalize()
 
     with open(output_path, "wb") as out:
-        out.write(iv + ciphertext)
+        out.write(ciphertext)
     print(f"File encrypted with AES256. Output: {output_path}")
 
-def aes256_decrypt_file(input_path, key_file, output_path):
+def aes256_block_decrypt_file(input_path, key_file, iv, output_path):
+    key = read_aes_key_from_file(key_file)
+    if iv == "null":
+        import secrets
+        iv = secrets.token_bytes(16)
+        print("random iv (hex):", iv.hex())
+    else:
+        iv = bytes.fromhex(iv)
+        print("args iv (hex):", iv.hex())
+
+    with open(input_path, "rb") as f, open(output_path, "wb") as f_out:
+        while True:
+            ciphertext = f.read(528)
+            if not ciphertext:
+                break
+            cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+            decryptor = cipher.decryptor()
+            padded_data = decryptor.update(ciphertext) + decryptor.finalize()
+            unpadder = sym_padding.PKCS7(128).unpadder()
+            data = unpadder.update(padded_data) + unpadder.finalize()
+            f_out.write(data)
+
+def aes256_decrypt_file(input_path, key_file, iv, output_path):
     """Decrypt a file using AES256-CBC, key from file."""
     key = read_aes_key_from_file(key_file)
     with open(input_path, "rb") as f:
-        iv = f.read(16)
+        # iv = f.read(16)
         print("iv (hex):", iv.hex())
         ciphertext = f.read()
     cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
@@ -267,6 +325,24 @@ def rsa_private_decrypt(input_path, priv_key_file, output_path):
         out.write(aes_key.hex())
     print(f"AES256 key decrypted and saved to {output_path}")
 
+def pad_size(input_path, output_path, algin_size):
+    with open(input_path, "rb") as f:
+        data = f.read()
+    # 计算需要填充的字节数
+    padding_size = (algin_size - (len(data) % algin_size)) % algin_size
+    if padding_size > 0:
+        # 生成填充数据
+        padding = b'\xFF' * padding_size
+        # 将原始数据和填充数据拼接
+        padded_data = data + padding
+    else:
+        # 如果已经是 512 的倍数，则不需要填充
+        padded_data = data
+
+    # 写入输出文件
+    with open(output_path, "wb") as f_out:
+        f_out.write(padded_data)
+
 def main():
     args = parse_cli_arguments()
     if args.gen_rsa_key:
@@ -283,10 +359,12 @@ def main():
         generate_aes256_key(args.aes_key)
     elif args.aes_encrypt and args.aes_key and args.out_file and args.in_file:
         print("start aes256 cbc encrypt")
-        aes256_encrypt_file(args.in_file, args.aes_key, args.out_file)
+        # aes256_encrypt_file(args.in_file, args.aes_key,args.iv or "null", args.out_file)
+        aes256_block_encrypt_file(args.in_file, args.aes_key,args.iv or "null", args.out_file)
     elif args.aes_decrypt and args.aes_key and args.out_file and args.in_file:
         print("start aes256 cbc decrypt")
-        aes256_decrypt_file(args.in_file, args.aes_key, args.out_file)
+        # aes256_decrypt_file(args.in_file, args.aes_key, args.iv or "null", args.out_file)
+        aes256_block_decrypt_file(args.in_file, args.aes_key, args.iv or "null", args.out_file)
     elif args.rsa_pub_encrypt and args.pub_key and args.in_file and args.out_file:
         print("start rsa pub encrypt")
         rsa_pss_public_encrypt(args.in_file, args.pub_key, args.out_file)
@@ -295,6 +373,8 @@ def main():
         rsa_private_decrypt(args.in_file, args.priv_key, args.out_file)
     elif args.append_sign and args.in_file and args.out_file and args.signature:
         append_rsapss_signature(args.in_file, args.out_file, args.signature)
+    elif args.in_file and args.out_file and args.align:
+        pad_size(args.in_file, args.out_file, args.align)
     else:
         print("hello crypto,nothing todo!")
 
